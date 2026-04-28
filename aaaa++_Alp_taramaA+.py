@@ -16,18 +16,40 @@ warnings.filterwarnings('ignore')
 logging.getLogger('yfinance').setLevel(logging.CRITICAL)
 logging.getLogger('yfinance').disabled = True
 
+# ==========================================
+# CONFIGURATION - Trading Parameters
+# ==========================================
+GUVEN_ESIGI = 0.60            # Confidence threshold for live scanning
+MIN_VOLUME_LIVE = 30_000_000  # Minimum daily volume in TL for live scanning
+SMOOTHING_FACTOR = 0.0001     # Smoothing factor to avoid division by zero
+SLEEP_TIME = 0.01             # Sleep time between API calls (seconds)
+MIN_ROWS_LIVE = 50            # Minimum data rows required for live scanning
+
+# Technical analysis parameters
+RSI_LENGTH = 14               # RSI period
+ATR_LENGTH = 14               # ATR period
+BB_LENGTH = 20                # Bollinger Bands period
+VOLUME_ROLLING = 20           # Volume rolling window
+OBV_ROLLING = 10              # OBV rolling window
+DATA_PERIOD = "3y"            # Historical data period
+
+# ==========================================
+# ==========================================
+
 class SessizIslem:
     def __enter__(self):
         self._orijinal_stdout = sys.stdout
         self._orijinal_stderr = sys.stderr
-        sys.stdout = open(os.devnull, 'w')
-        sys.stderr = open(os.devnull, 'w')
+        self._devnull = open(os.devnull, 'w')
+        sys.stdout = self._devnull
+        sys.stderr = self._devnull
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        sys.stdout.close()
-        sys.stderr.close()
-        sys.stdout = self._orijinal_stdout
-        sys.stderr = self._orijinal_stderr
+        try:
+            self._devnull.close()
+        finally:
+            sys.stdout = self._orijinal_stdout
+            sys.stderr = self._orijinal_stderr
 
 print("\ntarama")
 
@@ -40,8 +62,6 @@ model_yolu = os.path.join(calisma_klasoru, "bist_model_v5.json")
 if not os.path.exists(model_yolu):
     model_yolu = os.path.join(ana_klasor, "bist_model_v5.json")
 
-GUVEN_ESIGI = 0.60
-
 model = XGBClassifier()
 try:
     model.load_model(model_yolu)
@@ -50,7 +70,7 @@ except Exception:
     sys.exit()
 
 try:
-    with open('hisseler.txt', 'r') as dosya:
+    with open('hisseler.txt', 'r', encoding='utf-8') as dosya:
         bist_hisseler = [satir.strip() for satir in dosya if satir.strip()]
 except Exception:
     print("🛑 HATA: 'hisseler.txt' bulunamadı!");
@@ -66,7 +86,7 @@ try:
 
     xu100_df.index = pd.to_datetime(xu100_df.index).normalize().tz_localize(None)
     xu100_df['Endeks_Getiri'] = xu100_df['Close'].pct_change()
-    xu100_df['Endeks_RSI'] = ta.rsi(xu100_df['Close'], length=14)
+    xu100_df['Endeks_RSI'] = ta.rsi(xu100_df['Close'], length=RSI_LENGTH)
     print("✅ Endeks verisi onaylandı. Hisse taramasına geçiliyor...\n")
 except Exception:
     print(" HATA: İnternet veya Yahoo bağlantı sorunu!");
@@ -88,9 +108,9 @@ for i, hisse in enumerate(bist_hisseler):
         with SessizIslem():
             df = yf.Ticker(hisse).history(period="3y")
 
-        time.sleep(0.01)
+        time.sleep(SLEEP_TIME)
 
-        if df.empty or len(df) < 50:
+        if df.empty or len(df) < MIN_ROWS_LIVE:
             yahoo_bos_gelen += 1;
             continue
 
@@ -102,10 +122,10 @@ for i, hisse in enumerate(bist_hisseler):
         for col in ['Low', 'High', 'Open', 'Close']:
             df[col] = df[col].replace(0, np.nan).ffill()
 
-        df['Ort_Lot_Hacmi'] = df['Volume'].rolling(20).mean()
+        df['Ort_Lot_Hacmi'] = df['Volume'].rolling(VOLUME_ROLLING).mean()
 
         gunluk_tl_hacim = df['Ort_Lot_Hacmi'].iloc[-1] * df['Close'].iloc[-1]
-        if gunluk_tl_hacim < 30_000_000:
+        if gunluk_tl_hacim < MIN_VOLUME_LIVE:
             sığ_tahta_elenen += 1;
             continue
 
@@ -113,23 +133,23 @@ for i, hisse in enumerate(bist_hisseler):
         df['Bagil_Guc_Alpha'] = df['Hisse_Getiri'] - df['Endeks_Getiri']
 
         df['OBV'] = ta.obv(df['Close'], df['Volume'])
-        df['OBV_Egimi'] = df['OBV'] / (df['OBV'].rolling(10).mean() + 0.0001)
+        df['OBV_Egimi'] = df['OBV'] / (df['OBV'].rolling(OBV_ROLLING).mean() + SMOOTHING_FACTOR)
 
-        df['RSI_14'] = ta.rsi(df['Close'], length=14)
-        df['ATRr_14'] = ta.atr(df['High'], df['Low'], df['Close'], length=14)
+        df['RSI_14'] = ta.rsi(df['Close'], length=RSI_LENGTH)
+        df['ATRr_14'] = ta.atr(df['High'], df['Low'], df['Close'], length=ATR_LENGTH)
 
-        df['Hacim_Ort_Kati'] = df['Volume'] / (df['Ort_Lot_Hacmi'] + 0.0001)
+        df['Hacim_Ort_Kati'] = df['Volume'] / (df['Ort_Lot_Hacmi'] + SMOOTHING_FACTOR)
 
-        df['Bugun_Marj_%'] = ((df['High'] - df['Low']) / (df['Low'] + 0.0001)) * 100
-        df['Bugun_Gap_%'] = ((df['Open'] - df['Close'].shift(1)) / (df['Close'].shift(1) + 0.0001)) * 100
+        df['Bugun_Marj_%'] = ((df['High'] - df['Low']) / (df['Low'] + SMOOTHING_FACTOR)) * 100
+        df['Bugun_Gap_%'] = ((df['Open'] - df['Close'].shift(1)) / (df['Close'].shift(1) + SMOOTHING_FACTOR)) * 100
 
-        bbands = df.ta.bbands(length=20, std=2)
+        bbands = df.ta.bbands(length=BB_LENGTH, std=2)
         df['Bollinger_Genislik'] = bbands.iloc[:, 3] if bbands is not None and not bbands.empty else 1.0
 
-        df['Kapanis_Gucu'] = (df['Close'] - df['Low']) / (df['High'] - df['Low'] + 0.0001)
+        df['Kapanis_Gucu'] = (df['Close'] - df['Low']) / (df['High'] - df['Low'] + SMOOTHING_FACTOR)
 
         bbu_20 = bbands.iloc[:, 2] if bbands is not None and not bbands.empty else df['Close']
-        df['Bant_Tasma_Orani'] = (df['Close'] - bbu_20) / (bbu_20 + 0.0001)
+        df['Bant_Tasma_Orani'] = (df['Close'] - bbu_20) / (bbu_20 + SMOOTHING_FACTOR)
 
         df['RSI_Sisme_Skoru'] = df['RSI_14'] * df['Hacim_Ort_Kati']
 
@@ -166,7 +186,7 @@ for i, hisse in enumerate(bist_hisseler):
         basariyla_puanlanan += 1
 
     except Exception as e:
-        pass
+        logging.warning(f"Hisse '%s' işlenirken hata: %s", hisse, str(e))
 
     # ==========================================
 # 4. GÜNÜN YILDIZLARI RAPORU VE KAYIT
