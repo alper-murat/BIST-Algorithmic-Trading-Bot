@@ -6,9 +6,12 @@ from xgboost import XGBClassifier
 import numpy as np
 import warnings
 import os
+import logging
 from sklearn.metrics import accuracy_score, classification_report
 
 warnings.filterwarnings('ignore')
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
 print("\n🧠 YAPAY ZEKA V5.0 (ESNEK ZAMANLAMA & 2 GÜNLÜK HEDEF) 🧠")
 
@@ -16,7 +19,7 @@ calisma_klasoru = os.path.dirname(os.path.abspath(__file__))
 txt_yolu = os.path.join(calisma_klasoru, "hisseler.txt")
 
 try:
-    with open(txt_yolu, 'r') as dosya:
+    with open(txt_yolu, 'r', encoding='utf-8') as dosya:
         bist_hisseler = [satir.strip() for satir in dosya if satir.strip()]
 except FileNotFoundError:
     print(f"🛑 HATA: 'hisseler.txt' dosyası bulunamadı!"); exit()
@@ -27,7 +30,8 @@ try:
     xu100_df.index = pd.to_datetime(xu100_df.index).normalize().tz_localize(None)
     xu100_df['Endeks_Getiri'] = xu100_df['Close'].pct_change()
     xu100_df['Endeks_RSI'] = ta.rsi(xu100_df['Close'], length=14)
-except:
+except Exception as e:
+    logger.error(f"Endeks verisi çekilemedi: %s", str(e))
     print("🛑 HATA: Endeks verisi çekilemedi!"); exit()
 
 print(f"📥 {len(bist_hisseler)} hissenin verisi indiriliyor. (2 Günlük hedefler aranıyor)...")
@@ -106,7 +110,7 @@ for i, hisse in enumerate(bist_hisseler):
         tum_veriler.append(df)
 
     except Exception as e:
-        pass
+        logger.warning(f"Hisse '%s' işlenirken hata: %s", hisse, str(e))
 
 ana_veri = pd.concat(tum_veriler, ignore_index=True)
 print(f"\n✅ Veri toplama tamamlandı. Toplam eğitim satırı: {len(ana_veri)}")
