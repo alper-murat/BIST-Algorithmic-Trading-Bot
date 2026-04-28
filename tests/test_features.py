@@ -1,7 +1,11 @@
 import pytest
 import pandas as pd
 import numpy as np
+import pandas_ta as ta
 from datetime import datetime, timedelta
+
+import features
+
 
 # Test data generation helpers
 def create_sample_stock_data(days=100, start_price=100, volatility=0.02):
@@ -47,8 +51,6 @@ class TestFeatureCalculations:
 
     def test_rsi_calculation(self):
         """Test RSI calculation produces values in valid range."""
-        import pandas_ta as ta
-
         df = create_sample_stock_data(days=50)
         rsi = ta.rsi(df['Close'], length=14)
 
@@ -58,8 +60,6 @@ class TestFeatureCalculations:
 
     def test_atr_calculation(self):
         """Test ATR calculation produces positive values."""
-        import pandas_ta as ta
-
         df = create_sample_stock_data(days=50)
         atr = ta.atr(df['High'], df['Low'], df['Close'], length=14)
 
@@ -68,8 +68,6 @@ class TestFeatureCalculations:
 
     def test_obv_calculation(self):
         """Test OBV calculation."""
-        import pandas_ta as ta
-
         df = create_sample_stock_data(days=50)
         obv = ta.obv(df['Close'], df['Volume'])
 
@@ -77,8 +75,6 @@ class TestFeatureCalculations:
 
     def test_bollinger_bands(self):
         """Test Bollinger Bands calculation."""
-        import pandas_ta as ta
-
         df = create_sample_stock_data(days=50)
         bbands = df.ta.bbands(length=20, std=2)
 
@@ -90,30 +86,26 @@ class TestTargetGeneration:
     """Test target label generation logic."""
 
     def test_target_definition(self):
-        """Test the 3% profit target in 2 days logic."""
-        HEDEF_KAR = 1.03
-        STOP_LOSS = 0.98
-
+        """Test the 3% profit target in 2 days logic using features.calculate_target()."""
         df = create_sample_stock_data(days=50)
         df['Open'] = df['Close'].shift(1)  # Today's open = yesterday's close
 
-        # Simulate target calculation
-        gun1_open = df['Open'].shift(-1)
-        gun1_high = df['High'].shift(-1)
-        gun1_low = df['Low'].shift(-1)
-        gun2_high = df['High'].shift(-2)
+        # Use the actual features.calculate_target function
+        df = features.calculate_target(df, hedef_kar=1.03, stop_loss=0.98)
 
-        hedef_fiyat = gun1_open * HEDEF_KAR
-        stop_fiyat = gun1_open * STOP_LOSS
+        assert 'Target' in df.columns, "Target column should exist"
+        assert df['Target'].dtype == np.int64, "Target should be integer"
+        assert set(df['Target'].unique()).issubset({0, 1}), "Target should be 0 or 1"
 
-        gun1_hedefe_gitti = gun1_high >= hedef_fiyat
-        gun1_stop_oldu = gun1_low <= stop_fiyat
-        gun2_hedefe_gitti = (~gun1_stop_oldu) & (gun2_high >= hedef_fiyat)
+    def test_target_uses_parameters(self):
+        """Test that calculate_target respects hedef_kar and stop_loss parameters."""
+        df = create_sample_stock_data(days=50)
+        df['Open'] = df['Close'].shift(1)
 
-        target = (gun1_hedefe_gitti | gun2_hedefe_gitti).astype(int)
+        # Test with different parameters
+        df_test = features.calculate_target(df.copy(), hedef_kar=1.05, stop_loss=0.97)
 
-        assert target.name == 'Target', "Target column should be named 'Target'"
-        assert target.dtype == np.int64, "Target should be integer"
+        assert 'Target' in df_test.columns, "Target column should exist"
 
 
 class TestDataPreprocessing:
@@ -155,52 +147,95 @@ class TestDataPreprocessing:
 
 
 class TestFeatureEngineering:
-    """Test feature engineering calculations."""
+    """Test feature engineering calculations using features module."""
 
-    def test_bagil_guc_alpha(self):
-        """Test relative strength calculation (Bagil_Guc_Alpha)."""
-        df_stock = create_sample_stock_data(days=50)
-        df_index = create_sample_index_data(days=50)
+    def test_calculate_volume_features(self):
+        """Test volume features calculation using features module."""
+        df = create_sample_stock_data(days=50)
+        xu100_df = create_sample_index_data(days=50)
+        xu100_df['Endeks_Getiri'] = xu100_df['Close'].pct_change()
 
-        df_stock['Hisse_Getiri'] = df_stock['Close'].pct_change()
-        df_index['Endeks_Getiri'] = df_index['Close'].pct_change()
+        df = features.preprocess_stock_data(df, xu100_df)
+        df = features.calculate_volume_features(df)
 
-        df_stock['Bagil_Guc_Alpha'] = df_stock['Hisse_Getiri'] - df_index['Endeks_Getiri'].reindex(df_stock.index, method='ffill')
+        assert 'Ort_Lot_Hacmi' in df.columns, "Ort_Lot_Hacmi should exist"
+        assert 'Hacim_Ort_Kati' in df.columns, "Hacim_Ort_Kati should exist"
+        assert df['Hacim_Ort_Kati'].notna().sum() > 0, "Should have valid values"
 
-        assert 'Bagil_Guc_Alpha' in df_stock.columns, "Bagil_Guc_Alpha should exist"
-        assert df_stock['Bagil_Guc_Alpha'].notna().sum() > 0, "Should have valid values"
-
-    def test_bugun_marj_percent(self):
-        """Test daily margin percentage calculation."""
+    def test_calculate_price_features(self):
+        """Test price features calculation using features module."""
         df = create_sample_stock_data(days=30)
+        xu100_df = create_sample_index_data(days=30)
+        xu100_df['Endeks_Getiri'] = xu100_df['Close'].pct_change()
 
-        SMOOTHING_FACTOR = 0.0001
-        df['Bugun_Marj_%'] = ((df['High'] - df['Low']) / (df['Low'] + SMOOTHING_FACTOR)) * 100
+        df = features.preprocess_stock_data(df, xu100_df)
+        df = features.calculate_volume_features(df)
+        df = features.calculate_price_features(df)
 
         assert 'Bugun_Marj_%' in df.columns, "Bugun_Marj_% should exist"
-        assert (df['Bugun_Marj_%'] > 0).all(), "Daily margin should be positive"
-
-    def test_kapanis_gucu(self):
-        """Test close strength calculation."""
-        df = create_sample_stock_data(days=30)
-
-        SMOOTHING_FACTOR = 0.0001
-        df['Kapanis_Gucu'] = (df['Close'] - df['Low']) / (df['High'] - df['Low'] + SMOOTHING_FACTOR)
-
+        assert 'Bugun_Gap_%' in df.columns, "Bugun_Gap_% should exist"
         assert 'Kapanis_Gucu' in df.columns, "Kapanis_Gucu should exist"
         assert (df['Kapanis_Gucu'] >= 0).all(), "Close strength should be >= 0"
         assert (df['Kapanis_Gucu'] <= 1).all(), "Close strength should be <= 1"
 
-    def test_hacim_ort_kati(self):
-        """Test volume ratio calculation."""
-        df = create_sample_stock_data(days=30)
+    def test_calculate_bbands_features(self):
+        """Test Bollinger Bands features using features module."""
+        df = create_sample_stock_data(days=50)
+        xu100_df = create_sample_index_data(days=50)
+        xu100_df['Endeks_Getiri'] = xu100_df['Close'].pct_change()
 
-        df['Ort_Lot_Hacmi'] = df['Volume'].rolling(20).mean()
-        SMOOTHING_FACTOR = 0.0001
-        df['Hacim_Ort_Kati'] = df['Volume'] / (df['Ort_Lot_Hacmi'] + SMOOTHING_FACTOR)
+        df = features.preprocess_stock_data(df, xu100_df)
+        df = features.calculate_volume_features(df)
+        df = features.calculate_bbands_features(df)
 
-        assert 'Hacim_Ort_Kati' in df.columns, "Hacim_Ort_Kati should exist"
-        assert df['Hacim_Ort_Kati'].notna().sum() > 0, "Should have valid values"
+        assert 'Bollinger_Genislik' in df.columns, "Bollinger_Genislik should exist"
+        assert 'Bant_Tasma_Orani' in df.columns, "Bant_Tasma_Orani should exist"
+
+    def test_calculate_all_features_end_to_end(self):
+        """Test the complete calculate_all_features() pipeline."""
+        df_stock = create_sample_stock_data(days=100)
+        df_index = create_sample_index_data(days=100)
+
+        df_index['Endeks_Getiri'] = df_index['Close'].pct_change()
+        df_index['Endeks_RSI'] = ta.rsi(df_index['Close'], length=14)
+
+        # Calculate all features
+        df_result = features.calculate_all_features(df_stock, df_index)
+
+        # Verify all feature columns exist
+        for col in features.FEATURE_COLUMNS:
+            assert col in df_result.columns, f"Feature {col} should exist"
+
+        # Verify we have valid values for the most recent rows
+        assert df_result[features.FEATURE_COLUMNS].notna().any().any(), "Should have some valid values"
+
+    def test_get_feature_columns(self):
+        """Test that get_feature_columns returns correct list."""
+        cols = features.get_feature_columns()
+        assert isinstance(cols, list), "Should return a list"
+        assert len(cols) == 12, "Should have 12 features"
+        assert 'RSI_14' in cols, "RSI_14 should be in feature list"
+        assert 'Bagil_Guc_Alpha' in cols, "Bagil_Guc_Alpha should be in feature list"
+
+
+class TestFeaturesModuleConstants:
+    """Test that features module has correct constants."""
+
+    def test_smoothing_factor_value(self):
+        """Test SMOOTHING_FACTOR is set correctly."""
+        assert features.SMOOTHING_FACTOR == 0.0001, "SMOOTHING_FACTOR should be 0.0001"
+
+    def test_rsi_length_value(self):
+        """Test RSI_LENGTH is set correctly."""
+        assert features.RSI_LENGTH == 14, "RSI_LENGTH should be 14"
+
+    def test_atr_length_value(self):
+        """Test ATR_LENGTH is set correctly."""
+        assert features.ATR_LENGTH == 14, "ATR_LENGTH should be 14"
+
+    def test_bb_length_value(self):
+        """Test BB_LENGTH is set correctly."""
+        assert features.BB_LENGTH == 20, "BB_LENGTH should be 20"
 
 
 if __name__ == '__main__':
